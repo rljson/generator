@@ -17,7 +17,9 @@
   "scripts": {
     "generate": "tsx src/cli.ts",
     "setup-server-tables": "tsx src/setup-server-tables.ts",
-    "clear-server-tables": "tsx src/clear-server-tables.ts"
+    "clear-server-tables": "tsx src/clear-server-tables.ts",
+    "test": "vitest run --coverage",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@rljson/bs": "^0.0.23",
@@ -36,8 +38,11 @@
     "@rolldown/binding-win32-x64-msvc": "^1.2.0",
     "@types/mssql": "^9.1.8",
     "@types/node": "^25.9.2",
+    "@vitest/coverage-v8": "^4.1.9",
     "tsx": "^4.19.2",
-    "typescript": "~5.9.3"
+    "typescript": "~5.9.3",
+    "vite": "^7.3.0",
+    "vitest": "^4.1.9"
   },
   "packageManager": "pnpm@10.20.0",
   "pnpm": {

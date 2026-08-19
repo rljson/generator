@@ -15,7 +15,7 @@
 // made to work anyway.
 
 import { DecomposeChart, DecomposeChartComponentPropertyDef } from '@rljson/converter';
-import { Json, JsonBasicValueType } from '@rljson/json';
+import { Json, JsonBasicValueType, JsonValue } from '@rljson/json';
 
 // ─── Naming helpers ──────────────────────────────────────────────────────────
 
@@ -64,7 +64,7 @@ export const SCALAR_ARRAY_VALUE_FIELD = 'value';
  * data already matches what a `_scalarArray` sub-chart expects) and by any
  * real conversion feeding actual arrays of scalars through the same chart.
  */
-export const wrapScalarArrayItem = (item: Json): Json => ({
+export const wrapScalarArrayItem = (item: JsonValue): Json => ({
   [SCALAR_ARRAY_VALUE_FIELD]: item,
 });
 

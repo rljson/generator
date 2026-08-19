@@ -71,6 +71,12 @@ export const createChartGenerator = (
       const stats: Record<string, number> = {};
       for (const key of tableNames) {
         const table = rljson[key] as { _data?: unknown[] };
+        // fromJson()'s fixed table taxonomy (Cake/Layer/Components/SliceIds/
+        // InsertHistory/Edits/MultiEdits/EditHistory/TableCfgs) always gives
+        // every non-underscore key a real `_data` array (possibly empty,
+        // never absent) — this guard has no reachable false case today, but
+        // stays as a defensive check against a future/malformed table shape.
+        /* v8 ignore else -- @preserve */
         if (Array.isArray(table._data)) {
           stats[key] = table._data.length;
         }

@@ -127,30 +127,33 @@ export const customerChart: DecomposeChart = {
   ],
 };
 
+// generateRawCustomers() is deliberately deterministic (index-based, no
+// Math.random) for a given startIndex — same inputs always produce
+// byte-identical content, useful for reproducible tests.
+// createChartGenerator supplies a fresh startIndex on every generate()
+// call, so this only needs to actually vary the content per index (it
+// already does, via generateRawCustomers) — no anti-deduplication logic
+// needed here. Exported (not inlined into createChartGenerator's options)
+// so it's independently unit-testable, e.g. the isElevatorAvailable
+// null -> false defaulting below.
+export const generateRawCustomerJson = (count: number, startIndex: number): Json[] => {
+  const raw = generateRawCustomers(count, startIndex);
+  const withIds = raw.map((customer) => ({
+    ...customer,
+    customerId: String(customer._id),
+    addresses: customer.addresses.map((addr: RawAddress, j: number) => ({
+      ...addr,
+      addressId: `${customer._id}-${j}`,
+      isElevatorAvailable: addr.isElevatorAvailable ?? false,
+    })),
+  }));
+  // RawCustomer's typed interfaces have no index signature, so they don't
+  // structurally satisfy Json — the values themselves are plain JSON data.
+  return withIds as unknown as Json[];
+};
+
 export const customersGenerator: GeneratorEntry = createChartGenerator({
   label: 'Kunden',
   chart: customerChart,
-
-  // generateRawCustomers() is deliberately deterministic (index-based, no
-  // Math.random) for a given startIndex — same inputs always produce
-  // byte-identical content, useful for reproducible tests.
-  // createChartGenerator supplies a fresh startIndex on every generate()
-  // call, so this only needs to actually vary the content per index (it
-  // already does, via generateRawCustomers) — no anti-deduplication logic
-  // needed here.
-  generateRaw: (count, startIndex) => {
-    const raw = generateRawCustomers(count, startIndex);
-    const withIds = raw.map((customer) => ({
-      ...customer,
-      customerId: String(customer._id),
-      addresses: customer.addresses.map((addr: RawAddress, j: number) => ({
-        ...addr,
-        addressId: `${customer._id}-${j}`,
-        isElevatorAvailable: addr.isElevatorAvailable ?? false,
-      })),
-    }));
-    // RawCustomer's typed interfaces have no index signature, so they don't
-    // structurally satisfy Json — the values themselves are plain JSON data.
-    return withIds as unknown as Json[];
-  },
+  generateRaw: generateRawCustomerJson,
 });
