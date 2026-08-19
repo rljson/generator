@@ -1,0 +1,51 @@
+diff --git a/dist/io.js b/dist/io.js
+index 5289ba1036cf0e03e3c764d2ae9963608fc1b0f5..086970cded5385323c56c347efe1709b4a93659a 100644
+--- a/dist/io.js
++++ b/dist/io.js
+@@ -1046,10 +1046,26 @@ class IoMulti {
+     if (this.readables.length === 0) {
+       throw new Error("No readable Io available");
+     }
+-    for (const { io: readable } of this.readables) {
+-      return readable.contentType(request);
++    const groups = IoMulti._groupByPriority(this.readables);
++    const errors = [];
++    for (const group of groups) {
++      if (group.length === 1) {
++        try {
++          return await group[0].io.contentType(request);
++        } catch (error) {
++          errors.push(error);
++        }
++      } else {
++        const results = await Promise.allSettled(
++          group.map((r) => r.io.contentType(request))
++        );
++        for (const result of results) {
++          if (result.status === "fulfilled") return result.value;
++          errors.push(result.reason);
++        }
++      }
+     }
+-    throw new Error(`Table "${request.table}" not found`);
++    throw errors[0];
+   }
+   // ...........................................................................
+   /**
+@@ -1110,13 +1126,10 @@ class IoMulti {
+     const rawTableCfgs = /* @__PURE__ */ new Map();
+     for (const { io: readable } of this.readables) {
+       const cfgs = await readable.rawTableCfgs();
+-      if (cfgs.length > 0) {
+-        for (const tableCfg of cfgs) {
+-          if (!rawTableCfgs.has(tableCfg.key)) {
+-            rawTableCfgs.set(tableCfg.key, tableCfg);
+-          }
++      for (const tableCfg of cfgs) {
++        if (!rawTableCfgs.has(tableCfg.key)) {
++          rawTableCfgs.set(tableCfg.key, tableCfg);
+         }
+-        break;
+       }
+     }
+     return Array.from(rawTableCfgs.values());
