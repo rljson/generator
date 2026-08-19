@@ -1,9 +1,9 @@
 {
-  "name": "@rljson/template-project",
-  "version": "0.0.21",
-  "description": "Rljson template-project description",
-  "homepage": "https://github.com/rljson/template-project",
-  "bugs": "https://github.com/rljson/template-project/issues",
+  "name": "@rljson/generator",
+  "version": "0.0.1",
+  "description": "Rljson generator description",
+  "homepage": "https://github.com/rljson/generator",
+  "bugs": "https://github.com/rljson/generator/issues",
   "private": false,
   "license": "MIT",
   "engines": {
@@ -11,9 +11,9 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/rljson/template-project.git"
+    "url": "git+https://github.com/rljson/generator.git"
   },
-  "main": "dist/template-project.js",
+  "main": "dist/generator.js",
   "types": "dist/index.d.ts",
   "files": [
     "dist"
