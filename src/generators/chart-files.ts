@@ -18,9 +18,11 @@
 //
 // Either way, raw data is generated purely from the (derived or authored)
 // chart's declared `type`s (see generic-raw-data.ts), so it looks like
-// "fieldName-3" rather than realistic domain data. For that, write a
-// code-based generator instead (chart-generator.ts + customers.ts is the
-// reference example).
+// "fieldName-3" rather than realistic domain data (charts/Customer.json,
+// the "Customer" entity itself, is generated this same zero-code way).
+// For real domain data instead, write a code-based generator directly in
+// generators/index.ts using createChartGenerator() (see
+// chart-generator.ts's own doc comment).
 
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';

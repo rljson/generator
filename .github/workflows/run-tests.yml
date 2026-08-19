@@ -20,20 +20,7 @@ jobs:
         node-version: [22.x]
 
     steps:
-      # This repo's src/generators/customers.ts imports the sibling RLJSON
-      # repo directly across a "../../../RLJSON/..." relative path (the
-      # same multi-repo, sibling-checkout convention documented in the
-      # workspace's top-level README and used by
-      # scripts/clone-all-rljson-repos.js) — check both repos out under one
-      # shared workspace root so that path resolves in CI too.
       - uses: actions/checkout@v4
-        with:
-          path: data-generator
-
-      - uses: actions/checkout@v4
-        with:
-          repository: rljson/rljson
-          path: RLJSON
 
       # Corepack aktivieren, um sicherzustellen, dass pnpm funktioniert
       - name: Enable Corepack
@@ -41,32 +28,21 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v3
-        with:
-          # Pinned explicitly (matching package.json's own packageManager
-          # field) instead of letting the action auto-detect it from
-          # package.json — that auto-detection only looks at the default
-          # working directory (the workspace root), not this repo's own
-          # nested checkout path below.
-          version: 10.20.0
 
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'pnpm'
-          cache-dependency-path: data-generator/pnpm-lock.yaml
 
       - name: Cache pnpm dependencies
         uses: actions/cache@v3
         with:
           path: ~/.pnpm-store
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('data-generator/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
       - run: pnpm install --frozen-lockfile
-        working-directory: data-generator
       - run: pnpm exec tsc --noEmit
-        working-directory: data-generator
       - run: pnpm test
-        working-directory: data-generator

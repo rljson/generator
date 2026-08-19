@@ -5,11 +5,12 @@
 // found in the LICENSE file in the root of this package.
 
 // Shared types only — kept separate from index.ts so that files needing
-// just these types (customers.ts, chart-generator.ts) don't transitively
-// pull in index.ts's registry, which aggregates chart-files.ts's Node
-// "fs"-based discovery. That distinction matters beyond tidiness: the
-// generator-ui repo imports customers.ts's chart across a browser bundle
-// boundary, where Node built-ins aren't resolvable at all.
+// just these types (e.g. chart-generator.ts, or any future code-based
+// generator) don't transitively pull in index.ts's registry, which
+// aggregates chart-files.ts's Node "fs"-based discovery. That distinction
+// matters beyond tidiness: the generator-ui repo imports chart-from-json.ts
+// across a browser bundle boundary, where Node built-ins aren't
+// resolvable at all.
 
 import { Rljson, Route, TableCfg } from '@rljson/rljson';
 

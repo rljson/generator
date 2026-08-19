@@ -45,7 +45,11 @@ export interface ChartGeneratorOptions {
  * generator function. Route derivation, run-uniqueness, and the
  * GenerateResult/stats wrapping are all generic — driven entirely by the
  * chart — so adding a new data type never needs to duplicate that
- * boilerplate; see generators/customers.ts for a full worked example.
+ * boilerplate. This is also what chart-files.ts uses under the hood for
+ * every charts/*.json / examples/*.json entry — this function is only
+ * called directly when a code-based generator wants real domain data
+ * instead of chart-files.ts's mechanical placeholders (see
+ * generic-raw-data.ts).
  */
 export const createChartGenerator = (
   options: ChartGeneratorOptions,

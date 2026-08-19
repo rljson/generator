@@ -133,7 +133,9 @@ connection.
 
 The simplest way to add a new entity type needs **no code file at all**:
 drop a `DecomposeChart` as a plain JSON file into `charts/` (at the repo
-root). [`src/generators/chart-files.ts`](src/generators/chart-files.ts)
+root) — this is exactly how the "Customer" entity itself is registered,
+see [`charts/Customer.json`](charts/Customer.json).
+[`src/generators/chart-files.ts`](src/generators/chart-files.ts)
 auto-discovers every `charts/*.json` file at startup and registers it —
 route derivation, table creation, and even the raw sample data are all
 generated purely from the chart itself
@@ -207,12 +209,14 @@ wiring it through the same fixed checklist every time:
    is derived from it as `` `${_name.toLowerCase()}Cake` ``, the exact
    convention `@rljson/converter` itself uses. If the entity has
    sub-entities (like a customer's addresses), add a `_types` block — see
-   [`customers.ts`](src/generators/customers.ts) for a full worked
-   example.
+   [`charts/Customer.json`](charts/Customer.json) for a full worked
+   example of the chart shape itself (that one's chart-file-registered,
+   zero-code — a code-based generator writes the same shape as a
+   `DecomposeChart` TypeScript literal instead of JSON).
 2. **Write `generateRaw(count, startIndex)`.** Returns `count` raw rows
    matching the chart's `origin` paths, including a value for the chart's
    `_sliceId` field (and, for every `_types` entry, its own `_sliceId`
-   too — see how `customers.ts` derives `addressId` from `customerId`).
+   too — e.g. deriving an address's id from its parent customer's id).
    Must be deterministic for a given `(count, startIndex)` pair;
    `createChartGenerator()` already supplies a fresh, time-based
    `startIndex` per run, so this function only needs to make the content
@@ -252,10 +256,12 @@ entity type — see its own README. In short:
   own `charts/`/`examples/` discovery, just browser-safe — including
   running `examples/*.json` content through the very same
   `chartFromJson()`).
-- A **code-based** chart (like `customers.ts`) needs one line added to
-  generator-ui's `src/entity-types.ts` — the chart itself is imported
-  directly from this repo, the same cross-repo pattern this repo already
-  uses for RLJSON's example data.
+- A **code-based** chart (real domain data — there isn't one today, see
+  [Adding a genuinely new, independent entity type — with custom
+  data](#adding-a-genuinely-new-independent-entity-type--with-custom-data)
+  above) needs one line added to generator-ui's `src/entity-types.ts` —
+  the chart itself would be imported directly from this repo, the same
+  cross-repo pattern already used for `chartFromJson()`.
 
 Either way, remember: generator-ui only shows what the **Server** hosts
 (`RLJSON_ROUTES`) and what actually has data — steps 5–8 above still apply.

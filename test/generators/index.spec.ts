@@ -9,15 +9,12 @@ import { describe, expect, it } from 'vitest';
 import { generators } from '../../src/generators/index.ts';
 
 describe('generators registry', () => {
-  it('includes the code-based customers generator', () => {
-    expect(generators.customers).toBeDefined();
-    expect(generators.customers.route.flat).toBe('/customerCake');
-  });
-
-  it('has no chart-file/example-file entries when charts/ and examples/ are empty', () => {
-    // Real filesystem, no mocking: neither directory exists in this repo
-    // today, so chartFileGenerators()/exampleFileGenerators() both
-    // contribute nothing — the registry is exactly { customers }.
-    expect(Object.keys(generators)).toEqual(['customers']);
+  it('includes "Customer" from the real charts/Customer.json file (zero-code)', () => {
+    // Real filesystem, no mocking: charts/Customer.json is an actual file
+    // in this repo, and examples/ doesn't exist — so the registry is
+    // exactly this one, chart-file-derived entry.
+    expect(Object.keys(generators)).toEqual(['customer']);
+    expect(generators.customer.route.flat).toBe('/customerCake');
+    expect(generators.customer.label).toBe('Customer');
   });
 });
