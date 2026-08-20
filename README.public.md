@@ -109,8 +109,8 @@ SELECT * FROM PantrySchema.customerCake_tbl;
 
 | Symptom | Likely cause |
 |---|---|
-| `ACK timeout for ref ... after 60000ms` | Check the **Server's** console at that moment — the `onRefArrived` hook logs the real error there (e.g. `Invalid object name '...'` means a table is missing — rerun `setup-server-tables`). |
-| No new rows despite a successful run | Did you skip `setup-server-tables` after a DB reset? Or check whether the specific table you're looking at is expected to change for this generator (e.g. shared reference data intentionally dedupes). |
+| `ACK timeout for ref ... after 60000ms` | Check the **Server's** console at that moment — the `onRefArrived` hook logs the real error there. A missing individual table auto-provisions itself now (see [Server/README.public.md](../Server/README.public.md)); an error here more likely means the database's `main` schema/admin stored procedures were never bootstrapped at all — rerun `setup-server-tables` once for that. |
+| No new rows despite a successful run | Did the whole database ever get through the one-time [setup-server-tables](#one-time-setup-per-environment) bootstrap? Or check whether the specific table you're looking at is expected to change for this generator (e.g. shared reference data intentionally dedupes). |
 | `'pnpm' is not recognized` | Use `npm run <script>` instead — every script here is a plain command with no pnpm-specific behavior. |
 
 ## Adding a new generator
@@ -232,15 +232,21 @@ wiring it through the same fixed checklist every time:
    startup (`main()` in `server-bootstrap.ts`) — a running Server process
    will not pick up a route added to `RLJSON_ROUTES` while it was already
    running.
-7. **Provision the new tables**: `npm run setup-server-tables`.
-   [`src/table-cfgs.ts`](src/table-cfgs.ts) aggregates every registered
-   generator's `TableCfg`s automatically, so the new entity's tables are
-   created without touching that file.
-8. **Generate and verify.** `npm run generate` now syncs the new entity
-   type too, over its own connection. Check the Server's console for a
-   `[TRAFFIC] ⬅ [Server.Multicast] /<name>Cake {...}` line, or query
-   `<name>General_tbl` directly (see
+7. **Generate and verify.** `npm run generate` now syncs the new entity
+   type too, over its own connection — no separate table-provisioning
+   step needed: the Server creates any table it doesn't recognize yet
+   automatically, from the `TableCfg` it reads off the connected client
+   (see [Server/README.public.md](../Server/README.public.md)). Check the
+   Server's console for a `[TRAFFIC] ⬅ [Server.Multicast] /<name>Cake
+   {...}` line, or query `<name>General_tbl` directly (see
    [Verifying the data landed](#verifying-the-data-landed)).
+
+   (`npm run setup-server-tables` — [`src/table-cfgs.ts`](src/table-cfgs.ts)
+   aggregates every registered generator's `TableCfg`s automatically — is
+   still the one-time step that bootstraps the database's `main` schema
+   and admin stored procedures in the first place, see [One-time
+   setup](#one-time-setup-per-environment); it's just no longer something
+   you need to rerun for each individual new entity type.)
 
 (A generator that doesn't fit the chart-driven shape at all can still
 implement `GeneratorEntry` directly instead of using
