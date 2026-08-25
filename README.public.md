@@ -38,8 +38,14 @@ Generator (this repo)  --Socket.IO-->  Server  --IoMulti hot-swap-->  MSSQL
 
 - A running `@rljson/server` instance (see the Server repo's own README/
   runbook) reachable at `SERVER_URL`.
-- The Server's database schema provisioned once (see
-  [One-time setup](#one-time-setup-per-environment) below).
+- The Server's underlying database/login/schema **container** already
+  exists (an external, one-time admin step — see the top-level README's
+  step 1). Everything *inside* that container — the `main` schema, its
+  admin stored procedures, and every data table — is now provisioned
+  automatically by the Server itself on the very first `generate` run
+  (see [Server/README.public.md](../Server/README.public.md)).
+  [setup-server-tables](#one-time-setup-optional) still exists but is no
+  longer a required step.
 
 ## Installation
 
@@ -62,19 +68,25 @@ route (see [Adding a new generator](#adding-a-new-generator) below). The
 Server must be told to host every one of them via `RLJSON_ROUTES` (see the
 Server repo's `.env.example`).
 
-## One-time setup (per environment)
+## One-time setup (optional)
 
-Before the Server can accept any data, its database needs the table schema
-and a couple of admin stored procedures. Run this **once** per fresh
-database (safe to rerun — fully idempotent):
+The Server now provisions everything it needs — the `main` schema, its
+admin stored procedures, and every data table — automatically, the first
+time any ref reaches it (see
+[Server/README.public.md](../Server/README.public.md)). Plain
+`npm run generate` against a freshly created, empty database is enough;
+nothing needs to run first.
+
+`setup-server-tables` still exists for the rare case where you want the
+schema provisioned *before* the first real generate run (e.g. to inspect
+an empty schema, or in a scripted setup that shouldn't depend on the
+Server already being reachable) — safe to run, fully idempotent:
 
 ```bash
 npm run setup-server-tables
 ```
 
 Expected output: `Tables created/verified in the Server database.`
-
-Rerun this after any database reset, before generating data again.
 
 ## Generating data
 
@@ -109,8 +121,8 @@ SELECT * FROM PantrySchema.customerCake_tbl;
 
 | Symptom | Likely cause |
 |---|---|
-| `ACK timeout for ref ... after 60000ms` | Check the **Server's** console at that moment — the `onRefArrived` hook logs the real error there. A missing individual table auto-provisions itself now (see [Server/README.public.md](../Server/README.public.md)); an error here more likely means the database's `main` schema/admin stored procedures were never bootstrapped at all — rerun `setup-server-tables` once for that. |
-| No new rows despite a successful run | Did the whole database ever get through the one-time [setup-server-tables](#one-time-setup-per-environment) bootstrap? Or check whether the specific table you're looking at is expected to change for this generator (e.g. shared reference data intentionally dedupes). |
+| `ACK timeout for ref ... after 60000ms` | Check the **Server's** console at that moment — the `onRefArrived` hook logs the real error there. Both a missing table and a missing `main` schema/admin stored procedures now auto-provision on the fly (see [Server/README.public.md](../Server/README.public.md)); an error here more likely means the database/login/schema **container** itself doesn't exist yet — that one step stays manual (see the top-level README's step 1). |
+| No new rows despite a successful run | Check whether the specific table you're looking at is expected to change for this generator (e.g. shared reference data intentionally dedupes) — table/schema provisioning itself is automatic now, so a genuinely missing table would show as the ACK timeout above, not silently. |
 | `'pnpm' is not recognized` | Use `npm run <script>` instead — every script here is a plain command with no pnpm-specific behavior. |
 
 ## Adding a new generator
@@ -148,7 +160,7 @@ builds a value per field from nothing but its declared `type`:
    registry key). Add a `_types` array for sub-entities, exactly like a
    code-based chart; one placeholder child gets generated per parent
    automatically.
-2. Steps 5–8 below (Server route, restart, provision, generate) — nothing
+2. Steps 5–7 below (Server route, restart, generate) — nothing
    else in this repo needs to change.
 
 This trades realism for zero code: generated values are mechanical
@@ -191,7 +203,7 @@ chart — no other code path, no special-casing downstream.
    an empty example array can't have its item type inferred at all (falls
    back to `string`). For anything beyond this subset, hand-author the
    chart instead (previous section).
-2. Steps 5–8 below (Server route, restart, provision, generate) — nothing
+2. Steps 5–7 below (Server route, restart, generate) — nothing
    else in this repo needs to change.
 
 ### Adding a genuinely new, independent entity type — with custom data
@@ -241,12 +253,12 @@ wiring it through the same fixed checklist every time:
    {...}` line, or query `<name>General_tbl` directly (see
    [Verifying the data landed](#verifying-the-data-landed)).
 
-   (`npm run setup-server-tables` — [`src/table-cfgs.ts`](src/table-cfgs.ts)
-   aggregates every registered generator's `TableCfg`s automatically — is
-   still the one-time step that bootstraps the database's `main` schema
-   and admin stored procedures in the first place, see [One-time
-   setup](#one-time-setup-per-environment); it's just no longer something
-   you need to rerun for each individual new entity type.)
+   (`npm run setup-server-tables` —
+   [`src/table-cfgs.ts`](src/table-cfgs.ts) aggregates every registered
+   generator's `TableCfg`s automatically — still exists, but is entirely
+   optional now, see [One-time setup](#one-time-setup-optional): the
+   Server provisions the same schema itself, automatically, on this exact
+   step.)
 
 (A generator that doesn't fit the chart-driven shape at all can still
 implement `GeneratorEntry` directly instead of using
@@ -270,11 +282,11 @@ entity type — see its own README. In short:
   cross-repo pattern already used for `chartFromJson()`.
 
 Either way, remember: generator-ui only shows what the **Server** hosts
-(`RLJSON_ROUTES`) and what actually has data — steps 5–8 above still apply.
+(`RLJSON_ROUTES`) and what actually has data — steps 5–7 above still apply.
 
 ## Scripts reference
 
 | Command | Purpose |
 |---|---|
-| `npm run setup-server-tables` | One-time: create tables + install admin stored procedures |
+| `npm run setup-server-tables` | Optional: create tables + install admin stored procedures ahead of time — the Server now does the same automatically on the first `generate` run |
 | `npm run generate -- --count N` | Generate and sync `N` records to the Server |
