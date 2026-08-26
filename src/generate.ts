@@ -76,56 +76,75 @@ export const parseCount = (argv: string[]): number => {
 export const run = async (): Promise<void> => {
   const count = parseCount(process.argv.slice(2));
 
-  for (const { route, entries } of groupByRoute(Object.values(generators))) {
-    const rootTableKey = route.top.tableKey;
+  // Route groups run concurrently, not one after another: each opens its
+  // own independent Socket.IO connection (a Client/Server pair is
+  // single-route, see groupByRoute's own doc comment), so there is no
+  // shared state between them to serialize on. With N registered entity
+  // types, running them one at a time means paying for N sequential
+  // sendWithAck round trips (each already covering a whole batch of
+  // `count` records plus the Server's persist walk) even though nothing
+  // about them depends on one another -- wall-clock time used to grow
+  // with the number of entity types, not stay flat. Entries *within* one
+  // route group still run sequentially, since they share that one
+  // connection.
+  await Promise.all(
+    groupByRoute(Object.values(generators)).map((group) =>
+      runGroup(group, count),
+    ),
+  );
+};
 
-    const localIo = new IoMem();
-    await localIo.init();
+const runGroup = async (
+  { route, entries }: { route: Route; entries: GeneratorEntry[] },
+  count: number,
+): Promise<void> => {
+  const rootTableKey = route.top.tableKey;
 
-    const socket = socketIoClient(`${serverUrl()}${route.flat}`);
-    const client = new Client(
-      new SocketIoBridge(socket),
-      localIo,
-      new BsMem(),
-      route,
-      // ackTimeoutMs generous: the Server's onRefArrived hook walks and
-      // persists the full batch into MSSQL before acknowledging.
-      { syncConfig: { requireAck: true, ackTimeoutMs: 60_000 } },
-    );
-    await client.init();
-    await client.ready();
+  const localIo = new IoMem();
+  await localIo.init();
 
-    try {
-      for (const entry of entries) {
-        const result = entry.generate(count);
+  const socket = socketIoClient(`${serverUrl()}${route.flat}`);
+  const client = new Client(
+    new SocketIoBridge(socket),
+    localIo,
+    new BsMem(),
+    route,
+    // ackTimeoutMs generous: the Server's onRefArrived hook walks and
+    // persists the full batch into MSSQL before acknowledging.
+    { syncConfig: { requireAck: true, ackTimeoutMs: 60_000 } },
+  );
+  await client.init();
+  await client.ready();
 
-        if (result.validationErrors.length > 0) {
-          throw new Error(
-            `${entry.label}: ${result.validationErrors.join('; ')}`,
-          );
-        }
+  try {
+    for (const entry of entries) {
+      const result = entry.generate(count);
 
-        const tableCfgs =
-          (result.rljson.tableCfgs as TablesCfgTable | undefined)?._data ??
-          [];
-        for (const cfg of tableCfgs as TableCfg[]) {
-          await client.db!.core.createTable(cfg);
-        }
-        await client.db!.core.import(result.rljson);
-
-        const rootRows = (result.rljson[rootTableKey] as { _data?: any[] })
-          ?._data;
-        const ref = rootRows?.[0]?._hash as string | undefined;
-        if (!ref) {
-          throw new Error(
-            `${entry.label}: no row found in root table "${rootTableKey}" to announce.`,
-          );
-        }
-        await client.connector!.sendWithAck(ref);
+      if (result.validationErrors.length > 0) {
+        throw new Error(
+          `${entry.label}: ${result.validationErrors.join('; ')}`,
+        );
       }
-    } finally {
-      await client.tearDown();
-      socket.disconnect();
+
+      const tableCfgs =
+        (result.rljson.tableCfgs as TablesCfgTable | undefined)?._data ?? [];
+      for (const cfg of tableCfgs as TableCfg[]) {
+        await client.db!.core.createTable(cfg);
+      }
+      await client.db!.core.import(result.rljson);
+
+      const rootRows = (result.rljson[rootTableKey] as { _data?: any[] })
+        ?._data;
+      const ref = rootRows?.[0]?._hash as string | undefined;
+      if (!ref) {
+        throw new Error(
+          `${entry.label}: no row found in root table "${rootTableKey}" to announce.`,
+        );
+      }
+      await client.connector!.sendWithAck(ref);
     }
+  } finally {
+    await client.tearDown();
+    socket.disconnect();
   }
 };
