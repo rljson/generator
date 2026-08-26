@@ -230,7 +230,7 @@ describe('run', () => {
   });
 
   it('chunks a count larger than BATCH_SIZE into multiple batches, each generated, imported, and acked separately', async () => {
-    // BATCH_SIZE is 20 -- 45 means batches of 20, 20, 5.
+    // BATCH_SIZE is 10 -- 45 means batches of 10, 10, 10, 10, 5.
     process.argv = ['node', 'cli.ts', '--count=45'];
     const routeA = Route.fromFlat('/aCake');
     const entry = fakeEntry('A', routeA);
@@ -238,19 +238,18 @@ describe('run', () => {
 
     await run();
 
-    expect(entry.generate).toHaveBeenCalledTimes(3);
-    const [[size1, start1], [size2, start2], [size3, start3]] = (
-      entry.generate as any
-    ).mock.calls;
-    expect([size1, size2, size3]).toEqual([20, 20, 5]);
+    expect(entry.generate).toHaveBeenCalledTimes(5);
+    const calls = (entry.generate as any).mock.calls as [number, number][];
+    const sizes = calls.map(([size]) => size);
+    const starts = calls.map(([, start]) => start);
+    expect(sizes).toEqual([10, 10, 10, 10, 5]);
     // Every batch offsets from the SAME base index by its own position --
     // proven via the differences, since the base index itself is
     // time-based and not asserted exactly.
-    expect(start2 - start1).toBe(20);
-    expect(start3 - start1).toBe(40);
+    expect(starts.map((s) => s - starts[0])).toEqual([0, 10, 20, 30, 40]);
 
-    expect(importFn).toHaveBeenCalledTimes(3);
-    expect(sendWithAck).toHaveBeenCalledTimes(3);
+    expect(importFn).toHaveBeenCalledTimes(5);
+    expect(sendWithAck).toHaveBeenCalledTimes(5);
   });
 });
 

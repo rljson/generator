@@ -27,17 +27,34 @@ export const serverUrl = (): string =>
  * regardless of any server-side optimization. Chunking keeps each
  * individual round trip's cost roughly constant no matter how large
  * `--count` gets; see `runGroup` for how the chunks themselves are sent.
+ *
+ * Deliberately conservative: measured live against `--count 1000`, larger
+ * batches run concurrently (see BATCH_CONCURRENCY) competed hard enough
+ * for the Server's single Node event loop and MSSQL pool that individual
+ * batches occasionally blew well past the ACK timeout even though the
+ * *server* was still making steady progress — a smaller batch keeps that
+ * worst case bounded even under real concurrent load, not just in
+ * isolation.
  */
-const BATCH_SIZE = 20;
+const BATCH_SIZE = 10;
 
 /** Max batches in flight at once per route/connection. `sendWithAck` calls
  * for different refs on the same connection are independent (the
  * Connector matches each ack by ref, see `Connector.sendWithAck`), so
- * running several concurrently is safe and lets a large `--count` finish
- * in a fraction of the time strictly one-batch-at-a-time chunking would
- * take, while still keeping any single round trip's own cost bounded by
- * BATCH_SIZE. */
-const BATCH_CONCURRENCY = 4;
+ * running several concurrently is safe in principle and lets a large
+ * `--count` finish faster than strictly one-batch-at-a-time chunking
+ * would.
+ *
+ * Kept low (not e.g. matching the Server's MSSQL_POOL_MAX) on purpose:
+ * measured live that higher concurrency (4) made individual batches'
+ * *own* completion time unpredictable — not because anything was wrong,
+ * just contention on the Server's single Node event loop and connection
+ * pool — which is worse for ACK-timeout robustness than the modest
+ * throughput a smaller, safer value gives up. Raise this only after
+ * confirming empirically it doesn't reintroduce timeouts under a large
+ * `--count`.
+ */
+const BATCH_CONCURRENCY = 2;
 
 /** Runs `worker` once per index in `[0, total)`, at most `concurrency`
  * invocations in flight at any moment. Order of completion is not
@@ -165,8 +182,14 @@ const runGroup = async (
     new BsMem(),
     route,
     // ackTimeoutMs generous: the Server's onRefArrived hook walks and
-    // persists the full batch into MSSQL before acknowledging.
-    { syncConfig: { requireAck: true, ackTimeoutMs: 60_000 } },
+    // persists a whole batch into MSSQL before acknowledging, and under
+    // real concurrent load (several batches in flight at once, see
+    // BATCH_CONCURRENCY) an individual batch's own completion time can
+    // vary well beyond its cost in isolation, purely from contention —
+    // not a sign anything is actually stuck. 120s gives real margin on
+    // top of BATCH_SIZE/BATCH_CONCURRENCY already being tuned to keep the
+    // common case far below this.
+    { syncConfig: { requireAck: true, ackTimeoutMs: 120_000 } },
   );
   await client.init();
   await client.ready();
