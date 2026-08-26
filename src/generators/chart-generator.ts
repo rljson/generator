@@ -15,8 +15,15 @@ import { GenerateResult, GeneratorEntry } from './generator-entry.ts';
  * content-addressed, so byte-identical rows are silently deduplicated
  * rather than landing as new rows. Bounded (not a raw timestamp) so
  * generated ids/numbers stay human-scale.
+ *
+ * Exported so generate.ts can derive a single shared base index once per
+ * `generate()` call and then offset it per batch when chunking a large
+ * `--count` into several smaller syncs — each batch must land on a
+ * different index range, or two batches would generate byte-identical
+ * (and therefore silently deduplicated) content.
  */
-const timeBasedStartIndex = (): number => Math.floor(Date.now() / 1000) % 100_000;
+export const timeBasedStartIndex = (): number =>
+  Math.floor(Date.now() / 1000) % 100_000;
 
 export interface ChartGeneratorOptions {
   /** Human-readable label used in CLI output. */
@@ -32,10 +39,11 @@ export interface ChartGeneratorOptions {
   /**
    * Produces `count` raw rows matching the chart's expected input shape,
    * starting at `startIndex`. Must be deterministic for a given (count,
-   * startIndex) pair — createChartGenerator supplies a fresh, time-based
-   * startIndex on every generate() call, so callers don't need their own
-   * anti-deduplication logic; they only need indices to actually vary the
-   * generated content (e.g. by picking from a pool via `index % pool.length`).
+   * startIndex) pair — `generate()` supplies a fresh, time-based
+   * startIndex by default (or the caller's explicit one, see `generate()`
+   * below), so callers don't need their own anti-deduplication logic;
+   * they only need indices to actually vary the generated content (e.g.
+   * by picking from a pool via `index % pool.length`).
    */
   generateRaw: (count: number, startIndex: number) => Json[];
 }
@@ -66,9 +74,8 @@ export const createChartGenerator = (
     label: options.label,
     route,
 
-    generate(count: number): GenerateResult {
-      const startIndex = timeBasedStartIndex();
-      const raw = options.generateRaw(count, startIndex);
+    generate(count: number, startIndex?: number): GenerateResult {
+      const raw = options.generateRaw(count, startIndex ?? timeBasedStartIndex());
       const rljson = fromJson(raw, chart);
 
       const tableNames = Object.keys(rljson).filter((k) => !k.startsWith('_'));

@@ -42,7 +42,8 @@ vi.mock('../src/generators/index.ts', () => ({
   },
 }));
 
-const { serverUrl, groupByRoute, parseCount, run } = await import('../src/generate.ts');
+const { serverUrl, groupByRoute, parseCount, run, withConcurrency } =
+  await import('../src/generate.ts');
 
 const fakeEntry = (
   label: string,
@@ -153,6 +154,9 @@ describe('run', () => {
   });
 
   it('connects once per distinct route, creates tables, imports, and acks the root ref', async () => {
+    // count=1 keeps this to a single batch -- batching itself has its own
+    // dedicated tests below.
+    process.argv = ['node', 'cli.ts', '--count=1'];
     const routeA = Route.fromFlat('/aCake');
     fakeGenerators.a = fakeEntry('A', routeA, { tableCfgs: [{ key: 'aCake' }] });
 
@@ -170,6 +174,7 @@ describe('run', () => {
   });
 
   it('opens one connection per distinct route, and reuses one connection for entries sharing a route', async () => {
+    process.argv = ['node', 'cli.ts', '--count=1'];
     const routeA = Route.fromFlat('/aCake');
     const routeB = Route.fromFlat('/bCake');
     fakeGenerators.a1 = fakeEntry('A1', routeA);
@@ -201,6 +206,7 @@ describe('run', () => {
   });
 
   it('creates no tables when the result carries no tableCfgs table at all', async () => {
+    process.argv = ['node', 'cli.ts', '--count=1'];
     const routeA = Route.fromFlat('/aCake');
     fakeGenerators.a = fakeEntry('A', routeA, { omitTableCfgsTable: true });
 
@@ -209,13 +215,94 @@ describe('run', () => {
     expect(importFn).toHaveBeenCalledTimes(1);
   });
 
-  it('passes the parsed --count through to every generator', async () => {
+  it('passes the parsed --count through to every generator as a single batch when it fits in one', async () => {
     process.argv = ['node', 'cli.ts', '--count=7'];
     const routeA = Route.fromFlat('/aCake');
     const entry = fakeEntry('A', routeA);
     fakeGenerators.a = entry;
 
     await run();
-    expect(entry.generate).toHaveBeenCalledWith(7);
+    // 7 is below BATCH_SIZE, so this is one batch -- called once, with the
+    // full count and *some* numeric start index (the index itself is
+    // time-based, not asserted exactly here).
+    expect(entry.generate).toHaveBeenCalledTimes(1);
+    expect(entry.generate).toHaveBeenCalledWith(7, expect.any(Number));
+  });
+
+  it('chunks a count larger than BATCH_SIZE into multiple batches, each generated, imported, and acked separately', async () => {
+    // BATCH_SIZE is 20 -- 45 means batches of 20, 20, 5.
+    process.argv = ['node', 'cli.ts', '--count=45'];
+    const routeA = Route.fromFlat('/aCake');
+    const entry = fakeEntry('A', routeA);
+    fakeGenerators.a = entry;
+
+    await run();
+
+    expect(entry.generate).toHaveBeenCalledTimes(3);
+    const [[size1, start1], [size2, start2], [size3, start3]] = (
+      entry.generate as any
+    ).mock.calls;
+    expect([size1, size2, size3]).toEqual([20, 20, 5]);
+    // Every batch offsets from the SAME base index by its own position --
+    // proven via the differences, since the base index itself is
+    // time-based and not asserted exactly.
+    expect(start2 - start1).toBe(20);
+    expect(start3 - start1).toBe(40);
+
+    expect(importFn).toHaveBeenCalledTimes(3);
+    expect(sendWithAck).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('withConcurrency', () => {
+  it('runs every index from 0 to total, even when concurrency exceeds total', async () => {
+    const seen: number[] = [];
+    await withConcurrency(3, 10, async (i) => {
+      seen.push(i);
+    });
+    expect(seen.slice().sort((a, b) => a - b)).toEqual([0, 1, 2]);
+  });
+
+  it('does nothing for total=0', async () => {
+    const worker = vi.fn().mockResolvedValue(undefined);
+    await withConcurrency(0, 4, worker);
+    expect(worker).not.toHaveBeenCalled();
+  });
+
+  it('never runs more than `concurrency` workers at once', async () => {
+    const total = 5;
+    const concurrency = 2;
+    let current = 0;
+    let maxConcurrent = 0;
+    const deferreds = Array.from({ length: total }, () => {
+      let resolve!: () => void;
+      const promise = new Promise<void>((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    });
+
+    const donePromise = withConcurrency(total, concurrency, async (i) => {
+      current++;
+      maxConcurrent = Math.max(maxConcurrent, current);
+      await deferreds[i].promise;
+      current--;
+    });
+
+    // Let the first `concurrency` lanes dispatch their initial calls.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(current).toBe(concurrency);
+
+    // Release every batch one at a time; each release frees exactly one
+    // lane, which immediately claims the next not-yet-started index.
+    for (const d of deferreds) {
+      d.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+
+    await donePromise;
+    expect(maxConcurrent).toBe(concurrency);
   });
 });

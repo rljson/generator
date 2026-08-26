@@ -36,6 +36,13 @@ export interface GeneratorEntry {
    * generate() call); a new, independent entity type needs its own route.
    */
   route: Route;
-  /** Generates and converts `count` records, returns a ready-to-import result. */
-  generate(count: number): GenerateResult;
+  /**
+   * Generates and converts `count` records, returns a ready-to-import
+   * result. `startIndex`, when given, is used verbatim instead of the
+   * implementation's own default (usually time-based) — generate.ts uses
+   * this to chunk a large `--count` into several smaller batches, each
+   * needing its own distinct index range so two batches don't generate
+   * byte-identical (and therefore silently deduplicated) content.
+   */
+  generate(count: number, startIndex?: number): GenerateResult;
 }

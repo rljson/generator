@@ -12,10 +12,56 @@ import { Client, SocketIoBridge } from '@rljson/server';
 import { io as socketIoClient } from 'socket.io-client';
 
 import { GeneratorEntry, generators } from './generators/index.ts';
+import { timeBasedStartIndex } from './generators/chart-generator.ts';
 
 /** URL of the running @rljson/server instance to connect to. */
 export const serverUrl = (): string =>
   process.env.SERVER_URL ?? 'http://localhost:3000';
+
+/**
+ * Max records per `sendWithAck` batch. A single batch's whole subtree
+ * (e.g. one Customer's addresses and their component tables, times
+ * however many customers are in that batch) has to be walked and
+ * persisted server-side before the ack — a `--count` far above this,
+ * sent as one batch, risks exceeding the Server's ACK timeout on its own
+ * regardless of any server-side optimization. Chunking keeps each
+ * individual round trip's cost roughly constant no matter how large
+ * `--count` gets; see `runGroup` for how the chunks themselves are sent.
+ */
+const BATCH_SIZE = 20;
+
+/** Max batches in flight at once per route/connection. `sendWithAck` calls
+ * for different refs on the same connection are independent (the
+ * Connector matches each ack by ref, see `Connector.sendWithAck`), so
+ * running several concurrently is safe and lets a large `--count` finish
+ * in a fraction of the time strictly one-batch-at-a-time chunking would
+ * take, while still keeping any single round trip's own cost bounded by
+ * BATCH_SIZE. */
+const BATCH_CONCURRENCY = 4;
+
+/** Runs `worker` once per index in `[0, total)`, at most `concurrency`
+ * invocations in flight at any moment. Order of completion is not
+ * guaranteed; order of dispatch (which index each of the `concurrency`
+ * "lanes" picks up next) is, since each lane simply claims the next
+ * not-yet-claimed index as soon as it's free. Exported for direct,
+ * precise unit testing of the concurrency bound itself — the alternative
+ * (asserting it indirectly through the full run()/runEntry() stack) would
+ * mean choreographing exact promise-resolution timing through several
+ * more async layers for no real gain in confidence. */
+export const withConcurrency = async (
+  total: number,
+  concurrency: number,
+  worker: (index: number) => Promise<void>,
+): Promise<void> => {
+  let next = 0;
+  const lanes = Array.from({ length: Math.min(concurrency, total) }, async () => {
+    while (next < total) {
+      const index = next++;
+      await worker(index);
+    }
+  });
+  await Promise.all(lanes);
+};
 
 /**
  * Groups registered generators by their route. Each group gets its own
@@ -70,6 +116,15 @@ export const parseCount = (argv: string[]): number => {
  * durable server-side even though this process disconnects immediately
  * afterwards.
  *
+ * A large `--count` is NOT sent as one giant batch: each entry's records
+ * are chunked into batches of at most BATCH_SIZE, each with its own
+ * `generate()`/import/sendWithAck cycle, so an individual round trip's
+ * cost (and thus its risk of hitting the Server's ACK timeout) stays
+ * roughly constant regardless of how large `--count` gets. Batches run
+ * with bounded concurrency (BATCH_CONCURRENCY) rather than one at a time,
+ * so this scales without `--count 1000` simply taking 1000/20 times as
+ * long as `--count 20` would.
+ *
  * Tables in the Server's MSSQL database are NOT created here — that's a
  * one-time step, see setup-server-tables.ts.
  */
@@ -118,33 +173,69 @@ const runGroup = async (
 
   try {
     for (const entry of entries) {
-      const result = entry.generate(count);
-
-      if (result.validationErrors.length > 0) {
-        throw new Error(
-          `${entry.label}: ${result.validationErrors.join('; ')}`,
-        );
-      }
-
-      const tableCfgs =
-        (result.rljson.tableCfgs as TablesCfgTable | undefined)?._data ?? [];
-      for (const cfg of tableCfgs as TableCfg[]) {
-        await client.db!.core.createTable(cfg);
-      }
-      await client.db!.core.import(result.rljson);
-
-      const rootRows = (result.rljson[rootTableKey] as { _data?: any[] })
-        ?._data;
-      const ref = rootRows?.[0]?._hash as string | undefined;
-      if (!ref) {
-        throw new Error(
-          `${entry.label}: no row found in root table "${rootTableKey}" to announce.`,
-        );
-      }
-      await client.connector!.sendWithAck(ref);
+      await runEntry(client, rootTableKey, entry, count);
     }
   } finally {
     await client.tearDown();
     socket.disconnect();
   }
+};
+
+/**
+ * Generates and syncs one entry's `count` records, chunked into batches of
+ * at most BATCH_SIZE (see BATCH_SIZE's own doc comment for why). Every
+ * batch shares one common base index (a single `timeBasedStartIndex()`
+ * call for the whole entry, not one per batch — batches offset from it by
+ * their own position instead), so a rerun a moment later still lands on a
+ * disjoint index range as a whole, exactly like the unchunked path used
+ * to.
+ *
+ * The generate/import step for each batch runs strictly in sequence
+ * first, since it's cheap, local, in-memory work with no reason to
+ * parallelize; only the network-bound sendWithAck step (one per batch)
+ * then runs with bounded concurrency (BATCH_CONCURRENCY) via
+ * `withConcurrency`.
+ */
+const runEntry = async (
+  client: Client,
+  rootTableKey: string,
+  entry: GeneratorEntry,
+  count: number,
+): Promise<void> => {
+  const baseIndex = timeBasedStartIndex();
+  const batchCount = Math.ceil(count / BATCH_SIZE);
+  const refs: string[] = new Array(batchCount);
+
+  for (let batch = 0; batch < batchCount; batch++) {
+    const offset = batch * BATCH_SIZE;
+    const batchSize = Math.min(BATCH_SIZE, count - offset);
+    const result = entry.generate(batchSize, baseIndex + offset);
+
+    if (result.validationErrors.length > 0) {
+      throw new Error(
+        `${entry.label}: ${result.validationErrors.join('; ')}`,
+      );
+    }
+
+    const tableCfgs =
+      (result.rljson.tableCfgs as TablesCfgTable | undefined)?._data ?? [];
+    for (const cfg of tableCfgs as TableCfg[]) {
+      await client.db!.core.createTable(cfg);
+    }
+    await client.db!.core.import(result.rljson);
+
+    const rootRows = (result.rljson[rootTableKey] as { _data?: any[] })
+      ?._data;
+    const ref = rootRows?.[0]?._hash as string | undefined;
+    if (!ref) {
+      throw new Error(
+        `${entry.label}: no row found in root table "${rootTableKey}" to announce.`,
+      );
+    }
+    refs[batch] = ref;
+  }
+
+  await withConcurrency(refs.length, BATCH_CONCURRENCY, async (i) => {
+    await client.connector!.sendWithAck(refs[i]);
+  });
 };

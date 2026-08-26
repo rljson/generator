@@ -108,6 +108,19 @@ than resubmitting the same fixed set of records, which RLJSON's
 content-addressed storage would otherwise silently deduplicate. `--count 5`
 means "5 new records this run", not "always the same 5 records".
 
+### Large `--count` values
+
+A large `--count` (hundreds or thousands) is not sent to the Server as one
+giant batch. Internally, `generate.ts` chunks each generator's records into
+batches of at most `BATCH_SIZE` (20 today), each with its own
+generate/import/`sendWithAck` cycle, so a single round trip's cost — and
+its risk of exceeding the Server's ACK timeout — stays roughly constant no
+matter how large `--count` gets. Batches run with bounded concurrency
+(`BATCH_CONCURRENCY`, 4 today) rather than one at a time, so a large
+`--count` doesn't take proportionally as long as running that many small
+batches sequentially would. Both constants live at the top of
+[`src/generate.ts`](src/generate.ts).
+
 ### Verifying the data landed
 
 Quickest check is a direct SQL query against the Server's database, e.g.:
