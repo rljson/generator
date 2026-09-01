@@ -56,15 +56,14 @@ export const batchSize = (): number => positiveIntFromEnv('GENERATE_BATCH_SIZE',
  * `--count` finish faster than strictly one-batch-at-a-time chunking
  * would.
  *
- * The default (2) is deliberately conservative, not a universal constant:
- * measured live on one specific local machine that higher concurrency (4)
- * made individual batches' own completion time unpredictable under a
- * large `--count` -- not because anything was wrong, just contention on
- * the Server's single Node event loop and MSSQL connection pool, which
- * is worse for ACK-timeout robustness than the throughput a lower value
- * gives up. A different environment (more CPU, a remote/pooled MSSQL
- * instance) may tolerate a higher value -- override via
- * `GENERATE_BATCH_CONCURRENCY` and confirm empirically, rather than
+ * The default (2) is deliberately conservative: higher concurrency
+ * contends with itself on the Server's single Node event loop and MSSQL
+ * connection pool, which can make individual batches' own completion
+ * time unpredictable rather than actually finishing the whole run
+ * faster — worse for ACK-timeout robustness than the throughput a lower
+ * value gives up. A different environment (more CPU, a remote/pooled
+ * MSSQL instance) may tolerate a higher value — override via
+ * `GENERATE_BATCH_CONCURRENCY` and confirm empirically rather than
  * assuming this default transfers.
  */
 export const batchConcurrency = (): number =>
