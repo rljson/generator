@@ -42,8 +42,17 @@ vi.mock('../src/generators/index.ts', () => ({
   },
 }));
 
-const { serverUrl, groupByRoute, parseCount, run, withConcurrency } =
-  await import('../src/generate.ts');
+const {
+  serverUrl,
+  groupByRoute,
+  parseCount,
+  run,
+  withConcurrency,
+  positiveIntFromEnv,
+  batchSize,
+  batchConcurrency,
+  ackTimeoutMs,
+} = await import('../src/generate.ts');
 
 const fakeEntry = (
   label: string,
@@ -85,6 +94,73 @@ describe('serverUrl', () => {
   it('reads SERVER_URL from the environment', () => {
     process.env.SERVER_URL = 'https://example.com';
     expect(serverUrl()).toBe('https://example.com');
+  });
+});
+
+describe('positiveIntFromEnv', () => {
+  const VAR = 'GENERATE_TEST_VAR';
+  const original = process.env[VAR];
+  afterEach(() => {
+    if (original === undefined) delete process.env[VAR];
+    else process.env[VAR] = original;
+  });
+
+  it('falls back when the variable is unset', () => {
+    delete process.env[VAR];
+    expect(positiveIntFromEnv(VAR, 42)).toBe(42);
+  });
+
+  it('reads a positive integer from the environment', () => {
+    process.env[VAR] = '7';
+    expect(positiveIntFromEnv(VAR, 42)).toBe(7);
+  });
+
+  it('floors a non-integer value', () => {
+    process.env[VAR] = '7.9';
+    expect(positiveIntFromEnv(VAR, 42)).toBe(7);
+  });
+
+  it('falls back for a non-numeric value', () => {
+    process.env[VAR] = 'not-a-number';
+    expect(positiveIntFromEnv(VAR, 42)).toBe(42);
+  });
+
+  it('falls back for a non-positive value', () => {
+    process.env[VAR] = '0';
+    expect(positiveIntFromEnv(VAR, 42)).toBe(42);
+    process.env[VAR] = '-5';
+    expect(positiveIntFromEnv(VAR, 42)).toBe(42);
+  });
+});
+
+describe('batchSize/batchConcurrency/ackTimeoutMs', () => {
+  const VARS = [
+    'GENERATE_BATCH_SIZE',
+    'GENERATE_BATCH_CONCURRENCY',
+    'GENERATE_ACK_TIMEOUT_MS',
+  ] as const;
+  const originals = Object.fromEntries(VARS.map((v) => [v, process.env[v]]));
+  afterEach(() => {
+    for (const v of VARS) {
+      if (originals[v] === undefined) delete process.env[v];
+      else process.env[v] = originals[v];
+    }
+  });
+
+  it('default to the values tuned in this repo when unset', () => {
+    for (const v of VARS) delete process.env[v];
+    expect(batchSize()).toBe(10);
+    expect(batchConcurrency()).toBe(2);
+    expect(ackTimeoutMs()).toBe(120_000);
+  });
+
+  it('are each overridable via their own env var', () => {
+    process.env.GENERATE_BATCH_SIZE = '25';
+    process.env.GENERATE_BATCH_CONCURRENCY = '8';
+    process.env.GENERATE_ACK_TIMEOUT_MS = '60000';
+    expect(batchSize()).toBe(25);
+    expect(batchConcurrency()).toBe(8);
+    expect(ackTimeoutMs()).toBe(60_000);
   });
 });
 
@@ -250,6 +326,42 @@ describe('run', () => {
 
     expect(importFn).toHaveBeenCalledTimes(5);
     expect(sendWithAck).toHaveBeenCalledTimes(5);
+  });
+
+  it('respects GENERATE_BATCH_SIZE and GENERATE_ACK_TIMEOUT_MS end to end', async () => {
+    const originalBatchSize = process.env.GENERATE_BATCH_SIZE;
+    const originalAckTimeout = process.env.GENERATE_ACK_TIMEOUT_MS;
+    process.env.GENERATE_BATCH_SIZE = '5';
+    process.env.GENERATE_ACK_TIMEOUT_MS = '30000';
+    try {
+      process.argv = ['node', 'cli.ts', '--count=12'];
+      const routeA = Route.fromFlat('/aCake');
+      const entry = fakeEntry('A', routeA);
+      fakeGenerators.a = entry;
+
+      await run();
+
+      // count=12 at batch size 5 -> batches of 5, 5, 2 (3 batches, not the
+      // default batch size's 2 batches of 10, 2).
+      const sizes = (entry.generate as any).mock.calls.map(
+        ([size]: [number]) => size,
+      );
+      expect(sizes).toEqual([5, 5, 2]);
+
+      const clientOptions = ClientCtor.mock.calls[0][4];
+      expect(clientOptions.syncConfig.ackTimeoutMs).toBe(30000);
+    } finally {
+      if (originalBatchSize === undefined) {
+        delete process.env.GENERATE_BATCH_SIZE;
+      } else {
+        process.env.GENERATE_BATCH_SIZE = originalBatchSize;
+      }
+      if (originalAckTimeout === undefined) {
+        delete process.env.GENERATE_ACK_TIMEOUT_MS;
+      } else {
+        process.env.GENERATE_ACK_TIMEOUT_MS = originalAckTimeout;
+      }
+    }
   });
 });
 

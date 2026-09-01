@@ -112,14 +112,32 @@ means "5 new records this run", not "always the same 5 records".
 
 A large `--count` (hundreds or thousands) is not sent to the Server as one
 giant batch. Internally, `generate.ts` chunks each generator's records into
-batches of at most `BATCH_SIZE` (20 today), each with its own
-generate/import/`sendWithAck` cycle, so a single round trip's cost — and
+batches of at most `GENERATE_BATCH_SIZE` records (default 10), each with its
+own generate/import/`sendWithAck` cycle, so a single round trip's cost — and
 its risk of exceeding the Server's ACK timeout — stays roughly constant no
 matter how large `--count` gets. Batches run with bounded concurrency
-(`BATCH_CONCURRENCY`, 4 today) rather than one at a time, so a large
-`--count` doesn't take proportionally as long as running that many small
-batches sequentially would. Both constants live at the top of
-[`src/generate.ts`](src/generate.ts).
+(`GENERATE_BATCH_CONCURRENCY`, default 2) rather than one at a time, so a
+large `--count` doesn't take proportionally as long as running that many
+small batches sequentially would.
+
+All three tuning knobs are environment variables (see `.env.example`), not
+hardcoded constants — the defaults were measured against one specific local
+machine/MSSQL instance, not derived from any general capacity model:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GENERATE_BATCH_SIZE` | 10 | Max records per batch |
+| `GENERATE_BATCH_CONCURRENCY` | 2 | Max batches in flight at once |
+| `GENERATE_ACK_TIMEOUT_MS` | 120000 | `sendWithAck` timeout per batch |
+
+Raising `GENERATE_BATCH_CONCURRENCY` is not free: measured live that a
+higher value (4) made individual batches' own completion time unpredictable
+under a large `--count`, purely from contention on the Server's single Node
+event loop and MSSQL connection pool — not a sign anything was actually
+stuck, but worse for ACK-timeout robustness than the throughput a lower
+value gives up. Confirm empirically (a real large `--count` run, watching
+for `ACK timeout` errors) before raising it in a given environment, rather
+than assuming these defaults transfer.
 
 ### Verifying the data landed
 

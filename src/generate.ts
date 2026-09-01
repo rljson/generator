@@ -18,6 +18,20 @@ import { timeBasedStartIndex } from './generators/chart-generator.ts';
 export const serverUrl = (): string =>
   process.env.SERVER_URL ?? 'http://localhost:3000';
 
+/** Reads a positive integer from `envVar`, falling back to `fallback` when
+ * unset or not a positive number. Read lazily (called at point of use, not
+ * cached in a module-level const) for the same reason `serverUrl()` above
+ * is a function: `cli.ts` imports this module before calling
+ * `process.loadEnvFile()`, so a top-level `const` would freeze in the
+ * default before `.env` ever gets a chance to override it. Exported for
+ * direct testing, same reasoning as `withConcurrency`. */
+export const positiveIntFromEnv = (envVar: string, fallback: number): number => {
+  const raw = process.env[envVar];
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+};
+
 /**
  * Max records per `sendWithAck` batch. A single batch's whole subtree
  * (e.g. one Customer's addresses and their component tables, times
@@ -28,15 +42,12 @@ export const serverUrl = (): string =>
  * individual round trip's cost roughly constant no matter how large
  * `--count` gets; see `runGroup` for how the chunks themselves are sent.
  *
- * Deliberately conservative: measured live against `--count 1000`, larger
- * batches run concurrently (see BATCH_CONCURRENCY) competed hard enough
- * for the Server's single Node event loop and MSSQL pool that individual
- * batches occasionally blew well past the ACK timeout even though the
- * *server* was still making steady progress — a smaller batch keeps that
- * worst case bounded even under real concurrent load, not just in
- * isolation.
+ * The default (10) was tuned against one specific local machine and MSSQL
+ * instance (see `GENERATE_BATCH_CONCURRENCY`'s own doc for how) — treat it
+ * as a starting point, not a universal constant. Override via
+ * `GENERATE_BATCH_SIZE` per environment instead of editing this file.
  */
-const BATCH_SIZE = 10;
+export const batchSize = (): number => positiveIntFromEnv('GENERATE_BATCH_SIZE', 10);
 
 /** Max batches in flight at once per route/connection. `sendWithAck` calls
  * for different refs on the same connection are independent (the
@@ -45,16 +56,26 @@ const BATCH_SIZE = 10;
  * `--count` finish faster than strictly one-batch-at-a-time chunking
  * would.
  *
- * Kept low (not e.g. matching the Server's MSSQL_POOL_MAX) on purpose:
- * measured live that higher concurrency (4) made individual batches'
- * *own* completion time unpredictable — not because anything was wrong,
- * just contention on the Server's single Node event loop and connection
- * pool — which is worse for ACK-timeout robustness than the modest
- * throughput a smaller, safer value gives up. Raise this only after
- * confirming empirically it doesn't reintroduce timeouts under a large
- * `--count`.
+ * The default (2) is deliberately conservative, not a universal constant:
+ * measured live on one specific local machine that higher concurrency (4)
+ * made individual batches' own completion time unpredictable under a
+ * large `--count` -- not because anything was wrong, just contention on
+ * the Server's single Node event loop and MSSQL connection pool, which
+ * is worse for ACK-timeout robustness than the throughput a lower value
+ * gives up. A different environment (more CPU, a remote/pooled MSSQL
+ * instance) may tolerate a higher value -- override via
+ * `GENERATE_BATCH_CONCURRENCY` and confirm empirically, rather than
+ * assuming this default transfers.
  */
-const BATCH_CONCURRENCY = 2;
+export const batchConcurrency = (): number =>
+  positiveIntFromEnv('GENERATE_BATCH_CONCURRENCY', 2);
+
+/** `sendWithAck` timeout in ms, per batch. See `runGroup`'s own comment
+ * for why 120s of margin exists on top of `batchSize()`/`batchConcurrency()`
+ * already being tuned to keep the common case well below this. Override
+ * via `GENERATE_ACK_TIMEOUT_MS`. */
+export const ackTimeoutMs = (): number =>
+  positiveIntFromEnv('GENERATE_ACK_TIMEOUT_MS', 120_000);
 
 /** Runs `worker` once per index in `[0, total)`, at most `concurrency`
  * invocations in flight at any moment. Order of completion is not
@@ -134,13 +155,15 @@ export const parseCount = (argv: string[]): number => {
  * afterwards.
  *
  * A large `--count` is NOT sent as one giant batch: each entry's records
- * are chunked into batches of at most BATCH_SIZE, each with its own
+ * are chunked into batches of at most `batchSize()`, each with its own
  * `generate()`/import/sendWithAck cycle, so an individual round trip's
  * cost (and thus its risk of hitting the Server's ACK timeout) stays
  * roughly constant regardless of how large `--count` gets. Batches run
- * with bounded concurrency (BATCH_CONCURRENCY) rather than one at a time,
- * so this scales without `--count 1000` simply taking 1000/20 times as
- * long as `--count 20` would.
+ * with bounded concurrency (`batchConcurrency()`) rather than one at a
+ * time, so this scales without a large `--count` simply taking N times as
+ * long as a small one would. Both, plus the ACK timeout itself, are
+ * environment-tunable — see their own doc comments and
+ * GENERATE_BATCH_SIZE/GENERATE_BATCH_CONCURRENCY/GENERATE_ACK_TIMEOUT_MS.
  *
  * Tables in the Server's MSSQL database are NOT created here — that's a
  * one-time step, see setup-server-tables.ts.
@@ -184,12 +207,13 @@ const runGroup = async (
     // ackTimeoutMs generous: the Server's onRefArrived hook walks and
     // persists a whole batch into MSSQL before acknowledging, and under
     // real concurrent load (several batches in flight at once, see
-    // BATCH_CONCURRENCY) an individual batch's own completion time can
+    // batchConcurrency()) an individual batch's own completion time can
     // vary well beyond its cost in isolation, purely from contention —
-    // not a sign anything is actually stuck. 120s gives real margin on
-    // top of BATCH_SIZE/BATCH_CONCURRENCY already being tuned to keep the
-    // common case far below this.
-    { syncConfig: { requireAck: true, ackTimeoutMs: 120_000 } },
+    // not a sign anything is actually stuck. The default gives real
+    // margin on top of batchSize()/batchConcurrency() already being tuned
+    // to keep the common case far below this; see GENERATE_ACK_TIMEOUT_MS
+    // to raise it further for a slower environment.
+    { syncConfig: { requireAck: true, ackTimeoutMs: ackTimeoutMs() } },
   );
   await client.init();
   await client.ready();
@@ -206,17 +230,16 @@ const runGroup = async (
 
 /**
  * Generates and syncs one entry's `count` records, chunked into batches of
- * at most BATCH_SIZE (see BATCH_SIZE's own doc comment for why). Every
- * batch shares one common base index (a single `timeBasedStartIndex()`
- * call for the whole entry, not one per batch — batches offset from it by
- * their own position instead), so a rerun a moment later still lands on a
- * disjoint index range as a whole, exactly like the unchunked path used
- * to.
+ * at most `batchSize()` (see its own doc comment for why). Every batch
+ * shares one common base index (a single `timeBasedStartIndex()` call for
+ * the whole entry, not one per batch — batches offset from it by their own
+ * position instead), so a rerun a moment later still lands on a disjoint
+ * index range as a whole, exactly like the unchunked path used to.
  *
  * The generate/import step for each batch runs strictly in sequence
  * first, since it's cheap, local, in-memory work with no reason to
  * parallelize; only the network-bound sendWithAck step (one per batch)
- * then runs with bounded concurrency (BATCH_CONCURRENCY) via
+ * then runs with bounded concurrency (`batchConcurrency()`) via
  * `withConcurrency`.
  */
 const runEntry = async (
@@ -225,14 +248,15 @@ const runEntry = async (
   entry: GeneratorEntry,
   count: number,
 ): Promise<void> => {
+  const maxBatchSize = batchSize();
   const baseIndex = timeBasedStartIndex();
-  const batchCount = Math.ceil(count / BATCH_SIZE);
+  const batchCount = Math.ceil(count / maxBatchSize);
   const refs: string[] = new Array(batchCount);
 
   for (let batch = 0; batch < batchCount; batch++) {
-    const offset = batch * BATCH_SIZE;
-    const batchSize = Math.min(BATCH_SIZE, count - offset);
-    const result = entry.generate(batchSize, baseIndex + offset);
+    const offset = batch * maxBatchSize;
+    const thisBatchSize = Math.min(maxBatchSize, count - offset);
+    const result = entry.generate(thisBatchSize, baseIndex + offset);
 
     if (result.validationErrors.length > 0) {
       throw new Error(
@@ -258,7 +282,7 @@ const runEntry = async (
     refs[batch] = ref;
   }
 
-  await withConcurrency(refs.length, BATCH_CONCURRENCY, async (i) => {
+  await withConcurrency(refs.length, batchConcurrency(), async (i) => {
     await client.connector!.sendWithAck(refs[i]);
   });
 };
