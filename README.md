@@ -8,6 +8,12 @@ found in the LICENSE file in the root of this package.
 
 # @rljson/generator
 
+Headless RLJSON data generator. Connects to a running `@rljson/server`
+instance as a `Client`, generates test data, and syncs it over the official
+sync protocol — no UI, no direct database access, no console output on
+success. The matching viewer for this data lives in the sibling
+[generator-ui](https://github.com/rljson/generator-ui) repo.
+
 ## Users
 
 | File                                 | Purpose                     |

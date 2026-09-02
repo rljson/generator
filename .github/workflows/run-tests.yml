@@ -44,5 +44,5 @@ jobs:
             ${{ runner.os }}-pnpm-
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build
+      - run: pnpm exec tsc --noEmit
       - run: pnpm test
